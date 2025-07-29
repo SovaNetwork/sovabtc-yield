@@ -1,0 +1,46 @@
+{
+  "name": "sovabtc-yield",
+  "version": "1.0.0",
+  "description": "SovaBTC Yield System - Multi-chain Bitcoin yield generation platform",
+  "main": "index.js",
+  "scripts": {
+    "build": "forge build",
+    "test": "forge test",
+    "test:verbose": "forge test -vvv",
+    "test:gas": "forge test --gas-report",
+    "coverage": "forge coverage --report lcov",
+    "format": "forge fmt",
+    "lint": "solhint 'src/**/*.sol' 'test/**/*.sol' 'script/**/*.sol'",
+    "clean": "forge clean",
+    "deploy:ethereum": "forge script script/DeploySovaBTCYieldSystem.s.sol:DeploySovaBTCYieldSystem --rpc-url $ETHEREUM_RPC_URL --broadcast --verify",
+    "deploy:base": "forge script script/DeploySovaBTCYieldSystem.s.sol:DeploySovaBTCYieldSystem --rpc-url $BASE_RPC_URL --broadcast --verify",
+    "deploy:sova": "forge script script/DeploySovaBTCYieldSystem.s.sol:DeploySovaBTCYieldSystem --rpc-url $SOVA_RPC_URL --broadcast",
+    "deploy:sepolia": "forge script script/DeploySovaBTCYieldSystem.s.sol:DeploySovaBTCYieldSystem --rpc-url $SEPOLIA_RPC_URL --broadcast --verify"
+  },
+  "keywords": [
+    "bitcoin",
+    "yield",
+    "defi",
+    "solidity",
+    "ethereum",
+    "base",
+    "sova",
+    "cross-chain",
+    "hyperlane",
+    "erc4626",
+    "staking"
+  ],
+  "author": "Sova Network",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SovaNetwork/sovabtc-yield.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SovaNetwork/sovabtc-yield/issues"
+  },
+  "homepage": "https://github.com/SovaNetwork/sovabtc-yield#readme",
+  "devDependencies": {
+    "solhint": "^4.1.1"
+  }
+}
