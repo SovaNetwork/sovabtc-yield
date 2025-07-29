@@ -2,6 +2,27 @@
 
 A comprehensive Bitcoin yield generation platform built for multi-chain deployment across Ethereum, Base, and Sova Network. The system enables users to deposit various Bitcoin variants (WBTC, cbBTC, tBTC, native sovaBTC) into ERC-4626 compliant yield vaults and earn Bitcoin-denominated yields through professionally managed investment strategies.
 
+## 📋 Table of Contents
+
+- [🚀 Overview](#-overview)
+- [🏗️ System Architecture](#️-system-architecture)
+- [📋 Core Contracts](#-core-contracts)
+  - [1. SovaBTCYieldVault.sol](#1-sovabtcyieldvaultsol)
+  - [2. BridgedSovaBTC.sol](#2-bridgedsovabtcsol)
+  - [3. SovaBTCYieldStaking.sol](#3-sovabtcyieldstakingsol)
+- [🔗 Hyperlane Integration](#-hyperlane-integration)
+- [💰 Multi-Asset Collateral Support](#-multi-asset-collateral-support)
+- [🌐 Network Deployment](#-network-deployment)
+- [🛠️ Development Setup](#️-development-setup)
+- [🧪 Testing](#-testing)
+- [🔒 Security & Risk Management](#-security--risk-management)
+- [📊 Usage Examples](#-usage-examples)
+- [🏛️ Architecture Decisions](#️-architecture-decisions)
+- [📚 Documentation](#-documentation)
+- [🤝 Contributing](#-contributing)
+- [📄 License](#-license)
+- [🔗 Links](#-links)
+
 ## 🚀 Overview
 
 The SovaBTC Yield System consists of three core components that work together to provide a seamless Bitcoin yield experience:
@@ -165,15 +186,308 @@ function handle(uint32 origin, bytes32 sender, bytes calldata body) external {
 - **Role-Based Access**: BRIDGE_ROLE restricts minting to authorized relayers
 - **Burn-and-Mint Consistency**: Maintains total supply consistency across all chains
 
+## 💰 Multi-Asset Collateral Support
+
+### Overview
+
+The SovaBTCYieldVault is designed as a **multi-asset yield vault** that can accept various Bitcoin-backed tokens as collateral on each network. This design maximizes capital efficiency and provides users with flexibility in their Bitcoin holdings while generating unified yield.
+
+### Supported Bitcoin Variants
+
+Each vault deployment can support multiple Bitcoin-backed assets simultaneously:
+
+| Network | Supported Assets | Status | Contract Addresses |
+|---------|-----------------|--------|-------------------|
+| **Ethereum** | WBTC, cbBTC, tBTC, BTCB | ✅ Ready | WBTC: `0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599` |
+| **Base** | cbBTC, tBTC, WBTC (bridged) | ✅ Ready | cbBTC: `0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf` |
+| **Sova Network** | Native sovaBTC, WBTC (bridged), cbBTC (bridged) | ✅ Ready | sovaBTC: `0x2100000000000000000000000000000000000020` |
+| **Arbitrum** | WBTC, tBTC, cbBTC | 🔄 Planned | Coming Soon |
+| **Polygon** | WBTC, tBTC | 🔄 Planned | Coming Soon |
+
+### Asset Management Architecture
+
+#### Decimal Normalization System
+
+The vault automatically handles different decimal precisions across Bitcoin variants:
+
+```solidity
+// Automatic decimal normalization to 8 decimals (Bitcoin standard)
+function _normalizeAmount(address asset, uint256 amount) internal view returns (uint256) {
+    uint8 assetDecimals = IERC20Metadata(asset).decimals();
+    uint8 targetDecimals = 8; // Bitcoin precision
+    
+    if (assetDecimals == targetDecimals) {
+        return amount;
+    } else if (assetDecimals > targetDecimals) {
+        // Downscale (e.g., 18 decimals tBTC → 8 decimals)
+        uint256 divisor = 10 ** (assetDecimals - targetDecimals);
+        require(amount % divisor == 0, "Precision loss prevented");
+        return amount / divisor;
+    } else {
+        // Upscale (e.g., 6 decimals → 8 decimals)
+        return amount * (10 ** (targetDecimals - assetDecimals));
+    }
+}
+```
+
+#### Supported Decimal Configurations
+
+| Asset Type | Decimals | Example Tokens | Normalization |
+|------------|----------|----------------|---------------|
+| **8 Decimals** | 8 | WBTC, cbBTC, sovaBTC | Direct (no conversion) |
+| **18 Decimals** | 18 | tBTC | Downscale to 8 decimals |
+| **6 Decimals** | 6 | USDC-backed BTC (future) | Upscale to 8 decimals |
+
+### Adding New Collateral Types
+
+#### 1. Admin Function for Asset Addition
+
+```solidity
+/**
+ * @notice Add a new supported Bitcoin variant to the vault
+ * @param asset The ERC20 token address of the Bitcoin variant
+ * @param name Human-readable name for the asset (e.g., "Wrapped Bitcoin")
+ */
+function addSupportedAsset(address asset, string memory name) external onlyOwner {
+    require(asset != address(0), "Zero address");
+    require(!supportedAssets[asset], "Asset already supported");
+    require(IERC20Metadata(asset).decimals() <= 18, "Too many decimals");
+    
+    supportedAssets[asset] = true;
+    supportedAssetsList.push(asset);
+    
+    emit AssetAdded(asset, name);
+}
+```
+
+#### 2. Step-by-Step Addition Process
+
+**For Network Administrators:**
+
+```bash
+# 1. Verify the token contract and decimals
+cast call <TOKEN_ADDRESS> "decimals()" --rpc-url <NETWORK_RPC>
+cast call <TOKEN_ADDRESS> "symbol()" --rpc-url <NETWORK_RPC>
+cast call <TOKEN_ADDRESS> "name()" --rpc-url <NETWORK_RPC>
+
+# 2. Add the asset to the vault
+cast send <VAULT_ADDRESS> "addSupportedAsset(address,string)" \
+    <TOKEN_ADDRESS> "Token Name" \
+    --private-key <ADMIN_KEY> --rpc-url <NETWORK_RPC>
+
+# 3. Verify addition
+cast call <VAULT_ADDRESS> "isAssetSupported(address)" <TOKEN_ADDRESS> --rpc-url <NETWORK_RPC>
+```
+
+#### 3. Asset Validation Requirements
+
+Before adding a new Bitcoin variant, ensure:
+
+- ✅ **ERC20 Compliance**: Standard ERC20 interface implementation
+- ✅ **Bitcoin Backing**: 1:1 or verifiable backing with Bitcoin
+- ✅ **Liquidity**: Sufficient on-chain liquidity for large redemptions
+- ✅ **Security Audit**: Professional security audit of the token contract
+- ✅ **Decimal Support**: 6, 8, or 18 decimals (automatically handled)
+- ✅ **Rebase Protection**: No rebasing or deflationary mechanisms
+
+### Multi-Asset Deposit Flow
+
+#### User Experience
+
+Users can deposit any supported Bitcoin variant in a single transaction:
+
+```solidity
+// Example: User deposits WBTC on Ethereum
+function depositAsset(address asset, uint256 amount, address receiver) 
+    external returns (uint256 shares) 
+{
+    require(supportedAssets[asset], "Asset not supported");
+    
+    // 1. Transfer asset from user
+    IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
+    
+    // 2. Normalize to 8 decimals
+    uint256 normalizedAmount = _normalizeAmount(asset, amount);
+    
+    // 3. Calculate shares based on current exchange rate
+    uint256 shares = _calculateShares(normalizedAmount);
+    
+    // 4. Mint sovaBTCYield tokens to user
+    _mint(receiver, shares);
+    
+    emit AssetDeposited(msg.sender, asset, amount, shares);
+    return shares;
+}
+```
+
+#### Unified Accounting
+
+All assets are normalized to 8-decimal Bitcoin precision for unified accounting:
+
+```solidity
+// Total assets calculation across all supported types
+function totalAssets() public view override returns (uint256) {
+    uint256 total = 0;
+    
+    for (uint256 i = 0; i < supportedAssetsList.length; i++) {
+        address asset = supportedAssetsList[i];
+        uint256 balance = IERC20(asset).balanceOf(address(this));
+        total += _normalizeAmount(asset, balance);
+    }
+    
+    return total + assetsUnderManagement;
+}
+```
+
+### Asset Management Features
+
+#### 1. Asset Enumeration
+
+```solidity
+// Get all supported assets
+function getSupportedAssets() external view returns (address[] memory) {
+    return supportedAssetsList;
+}
+
+// Get asset information
+function getAssetInfo(address asset) external view returns (
+    bool isSupported,
+    string memory name,
+    uint8 decimals,
+    uint256 balance
+) {
+    isSupported = supportedAssets[asset];
+    if (isSupported) {
+        IERC20Metadata token = IERC20Metadata(asset);
+        name = token.name();
+        decimals = token.decimals();
+        balance = token.balanceOf(address(this));
+    }
+}
+```
+
+#### 2. Asset-Specific Analytics
+
+Track deposits and performance by asset type:
+
+```solidity
+// Asset-specific tracking
+mapping(address => uint256) public assetTotalDeposited;
+mapping(address => uint256) public assetCurrentBalance;
+
+// Update on each deposit
+function _trackAssetDeposit(address asset, uint256 amount) internal {
+    assetTotalDeposited[asset] += amount;
+    assetCurrentBalance[asset] = IERC20(asset).balanceOf(address(this));
+}
+```
+
+#### 3. Investment Strategy Allocation
+
+Admin can withdraw any supported asset for investment strategies:
+
+```solidity
+/**
+ * @notice Withdraw specific asset for investment strategies
+ * @param asset The Bitcoin variant to withdraw
+ * @param amount Amount in asset's native decimals
+ * @param destination Investment strategy contract address
+ */
+function adminWithdraw(address asset, uint256 amount, address destination) 
+    external onlyOwner 
+{
+    require(supportedAssets[asset], "Asset not supported");
+    require(IERC20(asset).balanceOf(address(this)) >= amount, "Insufficient balance");
+    
+    // Update tracking
+    uint256 normalizedAmount = _normalizeAmount(asset, amount);
+    assetsUnderManagement += normalizedAmount;
+    
+    // Transfer to investment strategy
+    IERC20(asset).safeTransfer(destination, amount);
+    
+    emit AdminWithdrawal(asset, amount, destination);
+}
+```
+
+### Network-Specific Asset Strategies
+
+#### Ethereum Mainnet Strategy
+- **Primary**: WBTC (highest liquidity)
+- **Secondary**: cbBTC (institutional grade)
+- **Alternative**: tBTC (decentralized)
+- **Future**: Additional institutional Bitcoin products
+
+#### Base Network Strategy
+- **Primary**: cbBTC (native Coinbase integration)
+- **Secondary**: tBTC (cross-chain from Ethereum)
+- **Alternative**: Bridged WBTC
+- **Future**: Base-native Bitcoin products
+
+#### Sova Network Strategy
+- **Primary**: Native sovaBTC (direct Bitcoin backing)
+- **Secondary**: Bridged major Bitcoin variants
+- **Integration**: Direct Bitcoin precompile access
+- **Future**: Bitcoin L2 integrations
+
+### Security Considerations for Multi-Asset Support
+
+#### Asset Risk Assessment
+
+Each asset undergoes evaluation:
+
+1. **Smart Contract Risk**: Audit quality and upgrade mechanisms
+2. **Custody Risk**: Bitcoin backing and custodial security
+3. **Liquidity Risk**: On-chain and off-chain liquidity depth
+4. **Regulatory Risk**: Compliance and regulatory standing
+5. **Technical Risk**: Integration complexity and edge cases
+
+#### Risk Mitigation Strategies
+
+```solidity
+// Asset-specific limits and controls
+mapping(address => uint256) public assetDepositCaps;
+mapping(address => bool) public assetPaused;
+
+function setAssetDepositCap(address asset, uint256 cap) external onlyOwner {
+    require(supportedAssets[asset], "Asset not supported");
+    assetDepositCaps[asset] = cap;
+}
+
+function pauseAsset(address asset) external onlyOwner {
+    require(supportedAssets[asset], "Asset not supported");
+    assetPaused[asset] = true;
+}
+```
+
+### Future Expansion Opportunities
+
+#### Layer 2 Bitcoin Solutions
+- **Lightning Network**: Integration with Lightning-backed tokens
+- **Bitcoin L2s**: Support for emerging Bitcoin Layer 2 solutions
+- **Liquid Network**: L-BTC integration for institutional users
+
+#### Institutional Products
+- **ETFs**: Bitcoin ETF token integrations
+- **Bank Products**: Traditional finance Bitcoin products
+- **Custody Solutions**: Enterprise-grade Bitcoin custodial tokens
+
+#### Cross-Chain Expansion
+- **Additional Networks**: Polygon, Avalanche, Fantom support
+- **Hyperlane Growth**: New chains as Hyperlane expands
+- **Interoperability**: Integration with other bridge protocols
+
+This multi-asset architecture provides maximum flexibility while maintaining security and unified yield generation across all supported Bitcoin variants.
+
 ## 🌐 Network Deployment
 
 ### Supported Networks
 
-| Network | Primary Asset | Reward Token | Deployment Status |
-|---------|--------------|--------------|-------------------|
-| **Ethereum** | WBTC | BridgedSovaBTC | ✅ Ready |
-| **Base** | cbBTC | BridgedSovaBTC | ✅ Ready |
-| **Sova Network** | Native sovaBTC | Native sovaBTC | ✅ Ready |
+| Network | Primary Asset | Additional Assets | Reward Token | Deployment Status |
+|---------|--------------|------------------|--------------|-------------------|
+| **Ethereum** | WBTC | cbBTC, tBTC, BTCB | BridgedSovaBTC | ✅ Ready |
+| **Base** | cbBTC | tBTC, WBTC (bridged) | BridgedSovaBTC | ✅ Ready |
+| **Sova Network** | Native sovaBTC | WBTC, cbBTC (bridged) | Native sovaBTC | ✅ Ready |
 
 ### Network-Aware Configuration
 
