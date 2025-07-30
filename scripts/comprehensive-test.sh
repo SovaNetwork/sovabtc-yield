@@ -171,32 +171,30 @@ if [ "$REDEEM_AMOUNT" -gt 0 ]; then
     echo -e "${GREEN}📊 WBTC received from redemption: $((WBTC_RECEIVED / 10**6)) mWBTC${NC}"
 fi
 
-# Step 10: Cross-chain testing (if Base Sepolia contracts are deployed)
-if [[ -n "$BRIDGED_SOVABTC_BASE_SEPOLIA" && -n "$BASE_SEPOLIA_RPC_URL" ]]; then
-    echo -e "\n${BLUE}🌉 Step 10: Testing cross-chain bridge${NC}"
-    echo "----------------------------------------"
+# Step 10: Cross-chain testing to Sova Network
+echo -e "\n${BLUE}🌉 Step 10: Testing cross-chain bridge to Sova Network${NC}"
+echo "--------------------------------------------------------"
+
+# Check if we have sovaBTC balance to bridge
+SOVABTC_BALANCE=$(cast call "$BRIDGED_SOVABTC_ADDRESS" "balanceOf(address)" "$OWNER_ADDRESS" --rpc-url "$SEPOLIA_RPC_URL")
+
+if [ "$SOVABTC_BALANCE" -gt 1000000000000000000 ]; then # More than 1 sovaBTC
+    BRIDGE_AMOUNT=1000000000000000000 # 1 sovaBTC
+    echo -e "${BLUE}Bridging $((BRIDGE_AMOUNT / 10**18)) sovaBTC from Sepolia to Sova Network${NC}"
     
-    # Check if we have sovaBTC balance to bridge
-    SOVABTC_BALANCE=$(cast call "$BRIDGED_SOVABTC_ADDRESS" "balanceOf(address)" "$OWNER_ADDRESS" --rpc-url "$SEPOLIA_RPC_URL")
+    TX_HASH=$(cast send "$BRIDGED_SOVABTC_ADDRESS" "bridgeToSova(address,uint256)" \
+        "$OWNER_ADDRESS" "$BRIDGE_AMOUNT" \
+        --private-key "$PRIVATE_KEY" --rpc-url "$SEPOLIA_RPC_URL")
+    check_tx "$TX_HASH" "Cross-chain bridge to Sova Network"
     
-    if [ "$SOVABTC_BALANCE" -gt 1000000000000000000 ]; then # More than 1 sovaBTC
-        BRIDGE_AMOUNT=1000000000000000000 # 1 sovaBTC
-        TX_HASH=$(cast send "$BRIDGED_SOVABTC_ADDRESS" "bridgeToChain(uint32,address,uint256)" \
-            84532 "$OWNER_ADDRESS" "$BRIDGE_AMOUNT" \
-            --private-key "$PRIVATE_KEY" --rpc-url "$SEPOLIA_RPC_URL")
-        check_tx "$TX_HASH" "Cross-chain bridge"
-        
-        echo -e "${YELLOW}⏳ Waiting 30 seconds for cross-chain message delivery...${NC}"
-        sleep 30
-        
-        # Check destination balance
-        DEST_BALANCE=$(cast call "$BRIDGED_SOVABTC_BASE_SEPOLIA" "balanceOf(address)" "$OWNER_ADDRESS" --rpc-url "$BASE_SEPOLIA_RPC_URL" 2>/dev/null || echo "0")
-        echo -e "${GREEN}🎯 Base Sepolia balance: $(cast from-ether $DEST_BALANCE) sovaBTC${NC}"
-    else
-        echo -e "${YELLOW}⚠️  Insufficient sovaBTC balance for bridging test${NC}"
-    fi
+    echo -e "${YELLOW}⏳ Waiting 30 seconds for Hyperlane message delivery...${NC}"
+    sleep 30
+    
+    echo -e "${GREEN}✅ Bridge message sent to Sova Network${NC}"
+    echo -e "${BLUE}💡 Note: Bridge uses hub-and-spoke model with Sova Network as hub${NC}"
 else
-    echo -e "${YELLOW}⚠️  Base Sepolia contracts not configured, skipping cross-chain test${NC}"
+    echo -e "${YELLOW}⚠️  Insufficient sovaBTC balance for bridging test${NC}"
+    echo -e "${BLUE}💡 Bridge architecture: External chains ↔ Sova Network (hub)${NC}"
 fi
 
 # Step 11: Final system health check
