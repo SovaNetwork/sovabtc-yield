@@ -1,112 +1,175 @@
-# SovaBTC Yield System Makefile
+# SovaBTC Yield System - Streamlined Makefile
+# Provides simple commands for development and deployment
 
-.PHONY: help setup clean build test coverage gas-report format lint deploy
+.PHONY: help setup test coverage gas-report clean validate-env deploy-full deploy-status health-check
 
 # Default target
 help: ## Show this help message
-	@echo "SovaBTC Yield System Development Commands"
-	@echo "======================================="
+	@echo "SovaBTC Yield System - Available Commands"
+	@echo "========================================"
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-# Setup and Installation
-setup: ## Install dependencies and setup environment
-	@echo "Installing Foundry dependencies..."
-	forge install
-	@echo "Installing Node.js dependencies..."
-	npm install
-	@echo "Setup complete!"
+#==============================================================================
+# DEVELOPMENT COMMANDS
+#==============================================================================
 
-clean: ## Clean build artifacts
-	@echo "Cleaning build artifacts..."
-	forge clean
-	rm -rf out/ cache/
+setup: ## Install dependencies and setup development environment
+	@echo "Setting up development environment..."
+	@forge install
+	@chmod +x scripts/*.sh
+	@if [ ! -f .env ]; then cp .env.streamlined .env; echo "Created .env from template"; fi
+	@echo "✅ Setup complete! Please configure your .env file."
 
-# Building
-build: ## Compile contracts
-	@echo "Compiling contracts..."
-	forge build
-
-# Testing
 test: ## Run all tests
 	@echo "Running tests..."
-	forge test -vvv
-
-test-verbose: ## Run tests with maximum verbosity
-	@echo "Running tests with full verbosity..."
-	forge test -vvvv
-
-test-gas: ## Run tests with gas reporting
-	@echo "Running tests with gas reporting..."
-	forge test --gas-report
+	@forge test -vv
 
 coverage: ## Generate test coverage report
 	@echo "Generating coverage report..."
-	forge coverage --report lcov
-	@echo "Coverage report generated in lcov.info"
+	@forge coverage
 
-gas-report: ## Generate detailed gas usage report
+gas-report: ## Generate gas usage report
 	@echo "Generating gas report..."
-	forge test --gas-report > gas-report.txt
-	@echo "Gas report saved to gas-report.txt"
+	@forge test --gas-report
 
-# Code Quality
-format: ## Format Solidity code
-	@echo "Formatting Solidity code..."
-	forge fmt
+clean: ## Clean build artifacts
+	@echo "Cleaning build artifacts..."
+	@forge clean
+	@rm -rf broadcast/
+	@rm -rf cache/
+	@rm -rf out/
 
-lint: ## Run Solidity linter
-	@echo "Running Solidity linter..."
-	solhint 'src/**/*.sol' 'test/**/*.sol' 'script/**/*.sol'
+#==============================================================================
+# DEPLOYMENT COMMANDS
+#==============================================================================
 
-# Static Analysis
-analyze: ## Run static analysis with Slither
-	@echo "Running static analysis..."
-	slither .
+validate-env: ## Validate environment configuration
+	@echo "Validating environment configuration..."
+	@./scripts/validate-env.sh
 
-# Deployment
-deploy-ethereum: ## Deploy to Ethereum mainnet
-	@echo "Deploying to Ethereum mainnet..."
-	forge script script/DeploySovaBTCYieldSystem.s.sol:DeploySovaBTCYieldSystem --rpc-url $(ETHEREUM_RPC_URL) --broadcast --verify --etherscan-api-key $(ETHERSCAN_API_KEY)
+deploy-full: validate-env ## Deploy complete system across all networks
+	@echo "Starting full system deployment..."
+	@./scripts/deploy-full-system.sh
 
-deploy-base: ## Deploy to Base network
-	@echo "Deploying to Base network..."
-	forge script script/DeploySovaBTCYieldSystem.s.sol:DeploySovaBTCYieldSystem --rpc-url $(BASE_RPC_URL) --broadcast --verify --etherscan-api-key $(BASESCAN_API_KEY)
+deploy-status: ## Check deployment status across all networks
+	@echo "Checking deployment status..."
+	@./scripts/deployment-status.sh
 
-deploy-sova: ## Deploy to Sova network
-	@echo "Deploying to Sova network..."
-	forge script script/DeploySovaBTCYieldSystem.s.sol:DeploySovaBTCYieldSystem --rpc-url $(SOVA_RPC_URL) --broadcast
+#==============================================================================
+# TESTING & MONITORING COMMANDS
+#==============================================================================
 
-deploy-sepolia: ## Deploy to Sepolia testnet
-	@echo "Deploying to Sepolia testnet..."
-	forge script script/DeploySovaBTCYieldSystem.s.sol:DeploySovaBTCYieldSystem --rpc-url $(SEPOLIA_RPC_URL) --broadcast --verify --etherscan-api-key $(ETHERSCAN_API_KEY)
+health-check: ## Run system health checks
+	@echo "Running system health checks..."
+	@./scripts/health-check.sh
 
-# Development Utilities
-install-deps: ## Install additional development dependencies
-	@echo "Installing additional dependencies..."
-	npm install --save-dev solhint slither-analyzer
+comprehensive-test: ## Run end-to-end system tests
+	@echo "Running comprehensive tests..."
+	@./scripts/comprehensive-test.sh
 
-node: ## Start local Anvil node for testing
-	@echo "Starting local Anvil node..."
-	anvil --host 0.0.0.0 --port 8545
+#==============================================================================
+# NETWORK-SPECIFIC DEPLOYMENTS (Advanced)
+#==============================================================================
 
-# Documentation
-docs: ## Generate documentation
-	@echo "Generating documentation..."
-	forge doc --build
+deploy-ethereum: validate-env ## Deploy to Ethereum mainnet only
+	@echo "Deploying to Ethereum..."
+	@forge script script/DeployStage1_Core.s.sol --rpc-url $$ETHEREUM_RPC_URL --broadcast --verify
 
-# Verification
-verify-contracts: ## Verify deployed contracts on Etherscan
-	@echo "Please use the deploy commands with --verify flag for automatic verification"
+deploy-base: validate-env ## Deploy to Base mainnet only
+	@echo "Deploying to Base..."
+	@forge script script/DeployStage1_Core.s.sol --rpc-url $$BASE_RPC_URL --broadcast --verify
 
-# Environment
-check-env: ## Check environment configuration
-	@echo "Checking environment configuration..."
-	@if [ -z "$(PRIVATE_KEY)" ]; then echo "❌ PRIVATE_KEY not set"; else echo "✅ PRIVATE_KEY configured"; fi
-	@if [ -z "$(ETHEREUM_RPC_URL)" ]; then echo "❌ ETHEREUM_RPC_URL not set"; else echo "✅ ETHEREUM_RPC_URL configured"; fi
-	@if [ -z "$(BASE_RPC_URL)" ]; then echo "❌ BASE_RPC_URL not set"; else echo "✅ BASE_RPC_URL configured"; fi
-	@if [ -z "$(SOVA_RPC_URL)" ]; then echo "❌ SOVA_RPC_URL not set"; else echo "✅ SOVA_RPC_URL configured"; fi
+deploy-sova: validate-env ## Deploy to Sova Network only
+	@echo "Deploying to Sova Network..."
+	@forge script script/DeployStage1_Core.s.sol --rpc-url $$SOVA_RPC_URL --broadcast --verify
 
-# Quick commands for common workflows
-quick-test: format test ## Format code and run tests
-full-check: format lint test coverage ## Complete code quality check
-deploy-testnet: deploy-sepolia ## Deploy to testnet for testing
+#==============================================================================
+# TESTNET DEPLOYMENTS
+#==============================================================================
+
+deploy-sepolia: validate-env ## Deploy to Sepolia testnet
+	@echo "Deploying to Sepolia..."
+	@forge script script/DeployMockTokens.s.sol --rpc-url $$SEPOLIA_RPC_URL --broadcast --verify
+	@forge script script/DeployStage1_Core.s.sol --rpc-url $$SEPOLIA_RPC_URL --broadcast --verify
+
+deploy-base-sepolia: validate-env ## Deploy to Base Sepolia testnet
+	@echo "Deploying to Base Sepolia..."
+	@forge script script/DeployMockTokens.s.sol --rpc-url $$BASE_SEPOLIA_RPC_URL --broadcast --verify
+	@forge script script/DeployStage1_Core.s.sol --rpc-url $$BASE_SEPOLIA_RPC_URL --broadcast --verify
+
+#==============================================================================
+# UTILITY COMMANDS
+#==============================================================================
+
+format: ## Format code
+	@echo "Formatting code..."
+	@forge fmt
+
+lint: ## Lint code
+	@echo "Linting code..."
+	@forge fmt --check
+
+build: ## Build contracts
+	@echo "Building contracts..."
+	@forge build
+
+install: ## Install forge dependencies
+	@echo "Installing dependencies..."
+	@forge install
+
+update: ## Update forge dependencies
+	@echo "Updating dependencies..."
+	@forge update
+
+#==============================================================================
+# QUICK START GUIDE
+#==============================================================================
+
+quick-start: ## Show quick start guide
+	@echo ""
+	@echo "🚀 SovaBTC Yield System - Quick Start Guide"
+	@echo "==========================================="
+	@echo ""
+	@echo "1. First-time setup:"
+	@echo "   make setup"
+	@echo ""
+	@echo "2. Configure your environment:"
+	@echo "   Edit .env file with your settings"
+	@echo ""
+	@echo "3. Validate configuration:"
+	@echo "   make validate-env"
+	@echo ""
+	@echo "4. Deploy complete system:"
+	@echo "   make deploy-full"
+	@echo ""
+	@echo "5. Check deployment status:"
+	@echo "   make deploy-status"
+	@echo ""
+	@echo "6. Run health checks:"
+	@echo "   make health-check"
+	@echo ""
+	@echo "For testnet deployment:"
+	@echo "   make deploy-sepolia"
+	@echo "   make deploy-base-sepolia"
+	@echo ""
+	@echo "For development:"
+	@echo "   make test"
+	@echo "   make coverage"
+	@echo ""
+
+#==============================================================================
+# ENVIRONMENT INFORMATION
+#==============================================================================
+
+env-info: ## Show environment information
+	@echo "Environment Information:"
+	@echo "======================="
+	@if [ -f .env ]; then \
+		echo "✅ .env file exists"; \
+		echo "📊 Variables set: $$(grep -c "^[^#].*=" .env 2>/dev/null || echo 0)"; \
+	else \
+		echo "❌ .env file not found"; \
+	fi
+	@echo "🔧 Forge version: $$(forge --version | head -1 2>/dev/null || echo 'Not installed')"
+	@echo "📁 Current directory: $$(pwd)"
+	@echo "🌐 Available networks: Ethereum, Base, Sova Network"
