@@ -18,6 +18,7 @@ A comprehensive Bitcoin yield generation platform built for multi-chain deployme
 - [🌐 Network Deployment](#-network-deployment)
 - [🛠️ Development Setup](#️-development-setup)
 - [🧪 Testing](#-testing)
+- [🧪 Testnet Deployment](#-testnet-deployment)
 - [🔒 Security & Risk Management](#-security--risk-management)
 - [📊 Usage Examples](#-usage-examples)
 - [🏛️ Architecture Decisions](#️-architecture-decisions)
@@ -1740,6 +1741,46 @@ make coverage
 # Run tests with gas reporting
 make gas-report
 ```
+
+## 🧪 Testnet Deployment
+
+### Quick Start Testing
+The system includes comprehensive testnet deployment tools with Hyperlane CLI integration:
+
+```bash
+# Install Hyperlane CLI
+npm install -g @hyperlane-xyz/cli
+
+# Setup testnet environment
+cp .env.example .env.testnet
+# Edit .env.testnet with your testnet configuration
+
+# Deploy to Sepolia
+make deploy-sepolia
+
+# Deploy to Base Sepolia  
+make deploy-base-sepolia
+
+# Run comprehensive E2E test
+./scripts/comprehensive-test.sh
+
+# Monitor system health
+./scripts/health-check.sh
+```
+
+### Supported Testnets
+- **Sepolia** (Ethereum): Full system with WBTC support
+- **Base Sepolia**: cbBTC and cross-chain bridging
+- **Arbitrum Sepolia**: tBTC integration testing
+
+### Testing Features
+- **Mock Tokens**: Pre-deployed WBTC, cbBTC, tBTC, SOVA for testing
+- **Faucet Functions**: Easy token acquisition for testing
+- **Cross-Chain**: Full Hyperlane message passing testing
+- **E2E Automation**: Complete user journey testing scripts
+- **Health Monitoring**: Real-time system status checking
+
+📖 **Full Guide**: See [Testnet Deployment Guide](docs/testnet-deployment.md) for detailed instructions.
 
 ## 🔒 Security & Risk Management
 
