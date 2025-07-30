@@ -72,8 +72,8 @@ The system documentation has been organized into focused topic pages for better 
 
 | Network | Primary Asset | Additional Assets | Reward Token | Deployment Status |
 |---------|--------------|------------------|--------------|-------------------|
-| **Ethereum** | WBTC | cbBTC, tBTC, BTCB | BridgedSovaBTC | ✅ Ready |
-| **Base** | cbBTC | tBTC, WBTC (bridged) | BridgedSovaBTC | ✅ Ready |
+| **Ethereum** | WBTC | cbBTC, tBTC, BTCB | Bridged SovaBTC | ✅ Ready |
+| **Base** | cbBTC | tBTC, WBTC (bridged) | Bridged SovaBTC | ✅ Ready |
 | **Sova Network** | Native sovaBTC | WBTC, cbBTC (bridged) | Native sovaBTC | ✅ Ready |
 
 ### Network-Aware Configuration
