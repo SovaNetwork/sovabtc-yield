@@ -13,6 +13,7 @@ A comprehensive Bitcoin yield generation platform built for multi-chain deployme
 - [🔗 Hyperlane Integration](#-hyperlane-integration)
 - [💰 Multi-Asset Collateral Support](#-multi-asset-collateral-support)
 - [🥩 Rewards & Staking System](#-rewards--staking-system)
+- [🔄 Redemption System](#-redemption-system)
 - [🔗 sovaBTCYield Token Composability](#-sovabtcyield-token-composability)
 - [🌐 Network Deployment](#-network-deployment)
 - [🛠️ Development Setup](#️-development-setup)
@@ -853,6 +854,528 @@ modifier autoCompound() {
     _;
 }
 ```
+
+## 🔄 Redemption System
+
+### Overview
+
+The SovaBTC Yield System provides **flexible redemption mechanisms** that allow users to exit their positions in multiple ways, each optimized for different use cases. The system supports both **standard ERC-4626 redemptions** for underlying assets and **yield-optimized redemptions** for sovaBTC rewards.
+
+### Redemption Architecture
+
+```mermaid
+graph TD
+    A[User Holdings: sovaBTCYield Tokens] --> B{Redemption Choice}
+    
+    B -->|Standard Redemption| C[ERC-4626 Redeem]
+    B -->|Yield Redemption| D[Reward-Based Redeem]
+    
+    C --> E[Receive Underlying Assets]
+    E --> F[WBTC, cbBTC, tBTC, etc.]
+    
+    D --> G[Receive sovaBTC/BridgedSovaBTC]
+    G --> H[Yield-Enhanced Value]
+    
+    subgraph "Asset Selection"
+        I[Admin Configurable]
+        J[User Preference]
+        K[Liquidity Based]
+        L[Pro-Rata Distribution]
+    end
+    
+    E --> I
+    G --> I
+    
+    subgraph "Network Specific"
+        M[Sova: Native sovaBTC]
+        N[Other Chains: BridgedSovaBTC]
+    end
+    
+    G --> M
+    G --> N
+    
+    style D fill:#e8f5e8
+    style G fill:#fff3e0
+    style H fill:#e1f5fe
+```
+
+### Redemption Types
+
+#### 1. Standard ERC-4626 Redemption
+
+**Purpose**: Exchange vault shares for underlying Bitcoin assets
+
+```solidity
+/**
+ * @notice Standard ERC-4626 redemption for underlying assets
+ * @param shares Amount of vault shares to redeem
+ * @param receiver Address to receive the assets
+ * @param owner Address of the share owner
+ * @return assets Amount of underlying assets received
+ */
+function redeem(uint256 shares, address receiver, address owner) 
+    external 
+    returns (uint256 assets) 
+{
+    // Validate redemption
+    require(shares > 0, "Zero shares");
+    require(receiver != address(0), "Zero address");
+    
+    // Check allowance if not owner
+    if (msg.sender != owner) {
+        uint256 allowed = allowance(owner, msg.sender);
+        require(allowed >= shares, "Insufficient allowance");
+        _approve(owner, msg.sender, allowed - shares);
+    }
+    
+    // Calculate asset amount
+    assets = convertToAssets(shares);
+    require(assets > 0, "Zero assets");
+    
+    // Burn shares
+    _burn(owner, shares);
+    
+    // Distribute underlying assets
+    _distributeUnderlyingAssets(receiver, assets);
+    
+    emit Withdraw(msg.sender, receiver, owner, assets, shares);
+}
+```
+
+**Asset Distribution Logic**:
+```solidity
+function _distributeUnderlyingAssets(address receiver, uint256 totalAssets) internal {
+    // Get available asset balances
+    uint256 totalAvailable = 0;
+    uint256[] memory balances = new uint256[](supportedAssetsList.length);
+    
+    for (uint256 i = 0; i < supportedAssetsList.length; i++) {
+        address asset = supportedAssetsList[i];
+        balances[i] = IERC20(asset).balanceOf(address(this));
+        totalAvailable += _normalizeAmount(asset, balances[i]);
+    }
+    
+    // Distribute pro-rata based on availability
+    for (uint256 i = 0; i < supportedAssetsList.length; i++) {
+        if (balances[i] > 0) {
+            address asset = supportedAssetsList[i];
+            uint256 normalizedBalance = _normalizeAmount(asset, balances[i]);
+            uint256 shareOfTotal = normalizedBalance * totalAssets / totalAvailable;
+            
+            // Convert back to asset decimals and transfer
+            uint256 assetAmount = _denormalizeAmount(asset, shareOfTotal);
+            if (assetAmount > 0) {
+                IERC20(asset).safeTransfer(receiver, assetAmount);
+            }
+        }
+    }
+}
+```
+
+#### 2. Yield-Optimized Redemption
+
+**Purpose**: Exchange vault shares for sovaBTC rewards at enhanced exchange rate
+
+```solidity
+/**
+ * @notice Redeem vault shares for sovaBTC/BridgedSovaBTC rewards
+ * @param shares Amount of vault shares to redeem
+ * @param receiver Address to receive reward tokens
+ * @return rewardAmount Amount of reward tokens received
+ */
+function redeemForRewards(uint256 shares, address receiver) 
+    external 
+    returns (uint256 rewardAmount) 
+{
+    require(shares > 0, "Zero shares");
+    require(receiver != address(0), "Zero address");
+    require(balanceOf(msg.sender) >= shares, "Insufficient balance");
+    
+    // Calculate reward amount using exchange rate
+    rewardAmount = shares * exchangeRate / EXCHANGE_RATE_PRECISION;
+    require(rewardAmount > 0, "Zero rewards");
+    
+    // Check reward token availability
+    require(rewardToken.balanceOf(address(this)) >= rewardAmount, "Insufficient rewards");
+    
+    // Burn vault shares
+    _burn(msg.sender, shares);
+    
+    // Transfer reward tokens
+    rewardToken.safeTransfer(receiver, rewardAmount);
+    
+    emit RewardTokensRedeemed(msg.sender, shares, rewardAmount);
+}
+```
+
+**Exchange Rate Mechanism**:
+```solidity
+// Exchange rate increases as yield is added to the vault
+// Initial rate: 1:1 (1e18 precision)
+// After yield: rate = (totalAssets + accumulatedYield) / totalShares
+function updateExchangeRate(uint256 yieldAdded) internal {
+    if (totalSupply() > 0) {
+        uint256 newTotalValue = totalAssets() + yieldAdded;
+        exchangeRate = newTotalValue * EXCHANGE_RATE_PRECISION / totalSupply();
+    }
+}
+```
+
+### Redemption Configuration
+
+#### Admin Controls
+
+```solidity
+/**
+ * @notice Configure redemption parameters
+ * @param _minRedemptionAmount Minimum amount required for redemption
+ * @param _redemptionFee Fee percentage for redemptions (basis points)
+ * @param _preferredAsset Asset to prefer for single-asset redemptions
+ */
+function setRedemptionConfig(
+    uint256 _minRedemptionAmount,
+    uint256 _redemptionFee,
+    address _preferredAsset
+) external onlyOwner {
+    require(_redemptionFee <= MAX_REDEMPTION_FEE, "Fee too high"); // Max 2%
+    require(_preferredAsset == address(0) || supportedAssets[_preferredAsset], "Invalid asset");
+    
+    minRedemptionAmount = _minRedemptionAmount;
+    redemptionFee = _redemptionFee;
+    preferredRedemptionAsset = _preferredAsset;
+    
+    emit RedemptionConfigUpdated(_minRedemptionAmount, _redemptionFee, _preferredAsset);
+}
+```
+
+#### Redemption Modes
+
+```solidity
+enum RedemptionMode {
+    ProRata,        // Distribute across all available assets proportionally
+    PreferredAsset, // Try preferred asset first, fallback to pro-rata
+    SingleAsset,    // Redeem in single specified asset (if available)
+    YieldOptimized  // Redeem for sovaBTC rewards using exchange rate
+}
+
+/**
+ * @notice Set default redemption mode for the vault
+ * @param mode The redemption mode to use as default
+ */
+function setDefaultRedemptionMode(RedemptionMode mode) external onlyOwner {
+    defaultRedemptionMode = mode;
+    emit RedemptionModeUpdated(mode);
+}
+```
+
+#### Advanced Redemption Options
+
+```solidity
+/**
+ * @notice Redeem with specific asset preference
+ * @param shares Amount of shares to redeem
+ * @param receiver Address to receive assets
+ * @param preferredAsset Asset to prefer for redemption
+ * @param mode Redemption mode to use
+ */
+function redeemWithPreference(
+    uint256 shares,
+    address receiver,
+    address preferredAsset,
+    RedemptionMode mode
+) external returns (uint256[] memory amounts) {
+    require(shares >= minRedemptionAmount, "Below minimum");
+    require(supportedAssets[preferredAsset] || preferredAsset == address(0), "Invalid asset");
+    
+    // Calculate total asset value
+    uint256 totalAssetValue = convertToAssets(shares);
+    
+    // Apply redemption fee if configured
+    if (redemptionFee > 0) {
+        uint256 fee = totalAssetValue * redemptionFee / 10000;
+        totalAssetValue -= fee;
+        // Fee stays in vault to benefit remaining holders
+    }
+    
+    // Execute redemption based on mode
+    amounts = _executeRedemption(receiver, totalAssetValue, preferredAsset, mode);
+    
+    // Burn shares after successful redemption
+    _burn(msg.sender, shares);
+    
+    emit RedemptionExecuted(msg.sender, receiver, shares, amounts, mode);
+}
+```
+
+### Liquidity Management
+
+#### Redemption Queue System
+
+For large redemptions that may exceed available liquidity:
+
+```solidity
+struct RedemptionRequest {
+    address user;
+    uint256 shares;
+    uint256 requestTime;
+    address preferredAsset;
+    RedemptionMode mode;
+    bool fulfilled;
+    uint256 queuePosition;
+}
+
+mapping(uint256 => RedemptionRequest) public redemptionQueue;
+uint256 public nextQueueId;
+uint256 public queueProcessingDelay = 24 hours;
+
+/**
+ * @notice Request redemption when immediate liquidity is insufficient
+ * @param shares Amount of shares to redeem
+ * @param preferredAsset Preferred asset for redemption
+ * @param mode Redemption mode
+ */
+function requestRedemption(
+    uint256 shares,
+    address preferredAsset,
+    RedemptionMode mode
+) external returns (uint256 requestId) {
+    require(shares >= minRedemptionAmount, "Below minimum");
+    require(balanceOf(msg.sender) >= shares, "Insufficient balance");
+    
+    // Lock shares by transferring to contract
+    _transfer(msg.sender, address(this), shares);
+    
+    requestId = ++nextQueueId;
+    redemptionQueue[requestId] = RedemptionRequest({
+        user: msg.sender,
+        shares: shares,
+        requestTime: block.timestamp,
+        preferredAsset: preferredAsset,
+        mode: mode,
+        fulfilled: false,
+        queuePosition: requestId
+    });
+    
+    emit RedemptionRequested(requestId, msg.sender, shares, preferredAsset);
+}
+
+/**
+ * @notice Process queued redemption requests (admin or automated)
+ * @param requestId The redemption request to process
+ */
+function processQueuedRedemption(uint256 requestId) external {
+    RedemptionRequest storage request = redemptionQueue[requestId];
+    require(!request.fulfilled, "Already fulfilled");
+    require(block.timestamp >= request.requestTime + queueProcessingDelay, "Too early");
+    
+    // Check if liquidity is now available
+    uint256 requiredAssets = convertToAssets(request.shares);
+    require(_hasRedemptionLiquidity(requiredAssets, request.preferredAsset), "Still insufficient liquidity");
+    
+    // Execute redemption
+    uint256[] memory amounts = _executeRedemption(
+        request.user, 
+        requiredAssets, 
+        request.preferredAsset, 
+        request.mode
+    );
+    
+    // Mark as fulfilled
+    request.fulfilled = true;
+    
+    // Burn the locked shares
+    _burn(address(this), request.shares);
+    
+    emit QueuedRedemptionProcessed(requestId, request.user, amounts);
+}
+```
+
+#### Liquidity Buffer Management
+
+```solidity
+/**
+ * @notice Set minimum liquidity buffer to maintain for redemptions
+ * @param bufferPercentage Percentage of total assets to keep as buffer (basis points)
+ */
+function setLiquidityBuffer(uint256 bufferPercentage) external onlyOwner {
+    require(bufferPercentage <= 5000, "Buffer too high"); // Max 50%
+    liquidityBufferBps = bufferPercentage;
+    emit LiquidityBufferUpdated(bufferPercentage);
+}
+
+/**
+ * @notice Check if redemption would breach liquidity buffer
+ * @param redemptionAmount Amount being redeemed
+ */
+function _checkLiquidityBuffer(uint256 redemptionAmount) internal view returns (bool) {
+    uint256 totalAssets = totalAssets();
+    uint256 requiredBuffer = totalAssets * liquidityBufferBps / 10000;
+    uint256 availableLiquidity = _getAvailableLiquidity();
+    
+    return (availableLiquidity - redemptionAmount) >= requiredBuffer;
+}
+```
+
+### Network-Specific Redemption Behavior
+
+#### Ethereum Mainnet Configuration
+```solidity
+// Ethereum: Multi-asset redemption preferred
+RedemptionConfig memory ethConfig = RedemptionConfig({
+    mode: RedemptionMode.ProRata,
+    preferredAsset: address(0), // No preference, use pro-rata
+    minAmount: 0.001 * 1e8, // 0.001 BTC minimum
+    fee: 50 // 0.5% redemption fee
+});
+```
+
+#### Base Network Configuration
+```solidity
+// Base: cbBTC preferred for lower fees
+RedemptionConfig memory baseConfig = RedemptionConfig({
+    mode: RedemptionMode.PreferredAsset,
+    preferredAsset: cbBTC, // Prefer cbBTC
+    minAmount: 0.0001 * 1e8, // 0.0001 BTC minimum (lower due to cheaper gas)
+    fee: 25 // 0.25% redemption fee
+});
+```
+
+#### Sova Network Configuration
+```solidity
+// Sova: Native sovaBTC preferred, yield-optimized redemptions encouraged
+RedemptionConfig memory sovaConfig = RedemptionConfig({
+    mode: RedemptionMode.YieldOptimized,
+    preferredAsset: SOVA_NETWORK_SOVABTC,
+    minAmount: 0.00001 * 1e8, // 0.00001 BTC minimum
+    fee: 0 // No fee to encourage native usage
+});
+```
+
+### Emergency Redemption Features
+
+#### Circuit Breaker Mechanism
+
+```solidity
+/**
+ * @notice Emergency pause redemptions during extreme conditions
+ */
+function pauseRedemptions() external onlyOwner {
+    redemptionsPaused = true;
+    emit RedemptionsPaused();
+}
+
+/**
+ * @notice Allow emergency redemptions with penalties during pause
+ * @param shares Amount of shares to redeem
+ */
+function emergencyRedeem(uint256 shares) external {
+    require(redemptionsPaused, "Not in emergency mode");
+    require(balanceOf(msg.sender) >= shares, "Insufficient balance");
+    
+    // Calculate assets with emergency penalty
+    uint256 assets = convertToAssets(shares);
+    uint256 penalty = assets * EMERGENCY_REDEMPTION_PENALTY / 10000; // 5% penalty
+    uint256 netAssets = assets - penalty;
+    
+    // Burn shares
+    _burn(msg.sender, shares);
+    
+    // Distribute available assets (penalty stays in vault)
+    _distributeUnderlyingAssets(msg.sender, netAssets);
+    
+    emit EmergencyRedemption(msg.sender, shares, netAssets, penalty);
+}
+```
+
+### Redemption Analytics & Monitoring
+
+#### Redemption Metrics
+
+```solidity
+/**
+ * @notice Get comprehensive redemption statistics
+ */
+function getRedemptionMetrics() external view returns (
+    uint256 totalRedemptions,
+    uint256 totalSharesRedeemed,
+    uint256 totalAssetsRedeemed,
+    uint256 averageRedemptionSize,
+    uint256 queuedRedemptions,
+    uint256 availableLiquidity,
+    uint256 currentExchangeRate
+) {
+    totalRedemptions = redemptionCount;
+    totalSharesRedeemed = cumulativeSharesRedeemed;
+    totalAssetsRedeemed = cumulativeAssetsRedeemed;
+    averageRedemptionSize = totalRedemptions > 0 ? totalAssetsRedeemed / totalRedemptions : 0;
+    queuedRedemptions = _getQueuedRedemptionCount();
+    availableLiquidity = _getAvailableLiquidity();
+    currentExchangeRate = exchangeRate;
+}
+
+/**
+ * @notice Estimate redemption output for different modes
+ * @param shares Amount of shares to redeem
+ * @param preferredAsset Asset preference for estimation
+ */
+function estimateRedemption(uint256 shares, address preferredAsset) 
+    external 
+    view 
+    returns (
+        uint256 standardAssets,
+        uint256 yieldRewards,
+        uint256 estimatedFee,
+        bool immediatelyAvailable
+    ) 
+{
+    standardAssets = convertToAssets(shares);
+    yieldRewards = shares * exchangeRate / EXCHANGE_RATE_PRECISION;
+    
+    if (redemptionFee > 0) {
+        estimatedFee = standardAssets * redemptionFee / 10000;
+        standardAssets -= estimatedFee;
+    }
+    
+    immediatelyAvailable = _hasRedemptionLiquidity(standardAssets, preferredAsset);
+}
+```
+
+### User Experience Optimizations
+
+#### Gas-Efficient Batch Redemptions
+
+```solidity
+/**
+ * @notice Batch redeem multiple positions in single transaction
+ * @param shareAmounts Array of share amounts to redeem
+ * @param receivers Array of receiver addresses
+ * @param modes Array of redemption modes
+ */
+function batchRedeem(
+    uint256[] calldata shareAmounts,
+    address[] calldata receivers,
+    RedemptionMode[] calldata modes
+) external {
+    require(shareAmounts.length == receivers.length, "Array length mismatch");
+    require(shareAmounts.length == modes.length, "Array length mismatch");
+    
+    uint256 totalShares = 0;
+    for (uint256 i = 0; i < shareAmounts.length; i++) {
+        totalShares += shareAmounts[i];
+    }
+    require(balanceOf(msg.sender) >= totalShares, "Insufficient balance");
+    
+    // Process each redemption
+    for (uint256 i = 0; i < shareAmounts.length; i++) {
+        _processSingleRedemption(shareAmounts[i], receivers[i], modes[i]);
+    }
+    
+    // Burn total shares at once
+    _burn(msg.sender, totalShares);
+}
+```
+
+This comprehensive redemption system provides maximum flexibility for users while maintaining vault security and liquidity management for administrators.
 
 ## 🔗 sovaBTCYield Token Composability
 
