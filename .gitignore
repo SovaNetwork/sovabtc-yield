@@ -9,7 +9,7 @@ build/
 /broadcast/**/dry-run/
 
 # Docs
-docs/
+# docs/  # Commented out - we want to track documentation
 
 # Dotenv file
 .env
