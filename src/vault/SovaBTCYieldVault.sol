@@ -12,6 +12,7 @@ import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/ut
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IRedemptionQueue} from "../redemption/IRedemptionQueue.sol";
 
 /**
  * @title SovaBTCYieldVault
@@ -30,6 +31,12 @@ contract SovaBTCYieldVault is
 
     /// @notice Whether this vault is deployed on Sova Network
     bool public isSovaNetwork;
+
+    /// @notice Redemption queue contract
+    IRedemptionQueue public redemptionQueue;
+
+    /// @notice Whether queue redemptions are enabled
+    bool public queueRedemptionsEnabled;
 
     /// @notice Reward token for redemptions (sovaBTC on Sova, BridgedSovaBTC elsewhere)
     IERC20 public rewardToken;
@@ -52,6 +59,9 @@ contract SovaBTCYieldVault is
     // Events
     event AssetAdded(address indexed asset, string name);
     event AssetRemoved(address indexed asset);
+    event QueueRedemptionRequested(bytes32 indexed requestId, address indexed user, uint256 shares);
+    event RedemptionQueueUpdated(address indexed newQueue);
+    event QueueRedemptionsToggled(bool enabled);
     event AdminWithdrawal(address indexed asset, uint256 amount, address indexed destination);
     event YieldAdded(uint256 rewardTokenAmount, uint256 newExchangeRate);
     event RewardTokensRedeemed(address indexed user, uint256 vaultTokens, uint256 rewardTokens);
@@ -65,6 +75,8 @@ contract SovaBTCYieldVault is
     error InsufficientRewardTokens();
     error InvalidExchangeRate();
     error NoAssetsToWithdraw();
+    error RedemptionQueueNotSet();
+    error QueueRedemptionsDisabled();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -215,6 +227,87 @@ contract SovaBTCYieldVault is
     }
 
     /**
+     * @notice Request queued redemption of vault shares
+     * @param shares Amount of shares to redeem
+     * @param receiver Address to receive assets
+     * @return requestId Unique request identifier
+     */
+    function requestQueuedRedemption(
+        uint256 shares,
+        address receiver
+    ) external whenNotPaused nonReentrant returns (bytes32 requestId) {
+        if (shares == 0) revert ZeroAmount();
+        if (receiver == address(0)) revert ZeroAddress();
+        if (address(redemptionQueue) == address(0)) revert RedemptionQueueNotSet();
+        if (!queueRedemptionsEnabled) revert QueueRedemptionsDisabled();
+        if (balanceOf(msg.sender) < shares) revert InsufficientRewardTokens();
+
+        // Calculate estimated output
+        uint256 estimatedAssets = convertToAssets(shares);
+
+        // Transfer shares to this contract (locked until fulfillment)
+        _transfer(msg.sender, address(this), shares);
+
+        // Request redemption through queue
+        requestId = redemptionQueue.requestRedemption(
+            receiver,
+            IRedemptionQueue.RedemptionType.VAULT_SHARES,
+            shares,
+            asset(),
+            estimatedAssets
+        );
+
+        emit QueueRedemptionRequested(requestId, receiver, shares);
+        return requestId;
+    }
+
+    /**
+     * @notice Fulfill a queued redemption (called by redemption queue)
+     * @param requestId Request identifier
+     * @param user User to receive assets
+     * @param shares Amount of shares to redeem
+     * @return actualAssets Actual assets sent
+     */
+    function fulfillQueuedRedemption(
+        bytes32 requestId,
+        address user,
+        uint256 shares
+    ) external nonReentrant returns (uint256 actualAssets) {
+        require(msg.sender == address(redemptionQueue), "Only redemption queue");
+        
+        // Calculate actual assets to send
+        actualAssets = convertToAssets(shares);
+        
+        // Burn the locked shares
+        _burn(address(this), shares);
+        
+        // Transfer assets to user
+        IERC20(asset()).safeTransfer(user, actualAssets);
+        
+        // Notify queue of fulfillment
+        redemptionQueue.fulfillRedemption(requestId, actualAssets);
+        
+        return actualAssets;
+    }
+
+    /**
+     * @notice Cancel a queued redemption and return shares to user
+     * @param requestId Request identifier
+     * @param user User to return shares to
+     * @param shares Amount of shares to return
+     */
+    function cancelQueuedRedemption(
+        bytes32 requestId,
+        address user,
+        uint256 shares
+    ) external {
+        require(msg.sender == address(redemptionQueue), "Only redemption queue");
+        
+        // Return locked shares to user
+        _transfer(address(this), user, shares);
+    }
+
+    /**
      * @notice Admin function to withdraw assets for investment strategies
      * @param asset The asset to withdraw
      * @param amount Amount to withdraw
@@ -294,6 +387,64 @@ contract SovaBTCYieldVault is
      */
     function isAssetSupported(address asset) external view returns (bool) {
         return supportedAssets[asset];
+    }
+
+    /**
+     * @notice Set redemption queue contract
+     * @param _redemptionQueue Address of redemption queue contract
+     */
+    function setRedemptionQueue(address _redemptionQueue) external onlyOwner {
+        redemptionQueue = IRedemptionQueue(_redemptionQueue);
+        emit RedemptionQueueUpdated(_redemptionQueue);
+    }
+
+    /**
+     * @notice Toggle queue redemptions
+     * @param enabled Whether to enable queue redemptions
+     */
+    function setQueueRedemptionsEnabled(bool enabled) external onlyOwner {
+        queueRedemptionsEnabled = enabled;
+        emit QueueRedemptionsToggled(enabled);
+    }
+
+    /**
+     * @notice Get user's active redemption requests
+     * @param user User address
+     * @return Active request IDs
+     */
+    function getUserActiveRedemptions(address user) external view returns (bytes32[] memory) {
+        if (address(redemptionQueue) == address(0)) {
+            return new bytes32[](0);
+        }
+        return redemptionQueue.getUserActiveRequests(user);
+    }
+
+    /**
+     * @notice Get redemption queue status
+     * @return queueSize Current queue size
+     * @return dailyVolumeUsed Volume used today
+     * @return dailyVolumeLimit Daily volume limit
+     */
+    function getRedemptionQueueStatus() external view returns (
+        uint256 queueSize,
+        uint256 dailyVolumeUsed,
+        uint256 dailyVolumeLimit
+    ) {
+        if (address(redemptionQueue) == address(0)) {
+            return (0, 0, 0);
+        }
+        return redemptionQueue.getQueueStatus();
+    }
+
+    /**
+     * @notice Get estimated fulfillment time for new redemption
+     * @return estimatedTime When a new request would be fulfilled
+     */
+    function getEstimatedRedemptionTime() external view returns (uint256 estimatedTime) {
+        if (address(redemptionQueue) == address(0)) {
+            return block.timestamp; // Immediate if no queue
+        }
+        return redemptionQueue.getEstimatedFulfillmentTime();
     }
 
     /**

@@ -18,7 +18,7 @@ contract MockWBTC is ERC20Upgradeable, OwnableUpgradeable {
 
     function initialize(string memory name, string memory symbol) public initializer {
         __ERC20_init(name, symbol);
-        __Ownable_init();
+        __Ownable_init(msg.sender);
         
         // Mint initial supply to deployer for testing
         _mint(msg.sender, 1000 * 10**DECIMALS); // 1000 WBTC

@@ -7,6 +7,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import "../src/vault/SovaBTCYieldVault.sol";
 import "../src/staking/SovaBTCYieldStaking.sol";
 import "../src/bridges/BridgedSovaBTC.sol";
+import "../src/redemption/RedemptionQueue.sol";
 
 contract DeploySovaBTCYieldSystem is Script {
     // Configuration
@@ -27,6 +28,7 @@ contract DeploySovaBTCYieldSystem is Script {
         address rewardToken; // BridgedSovaBTC or native sovaBTC
         address yieldVault;
         address yieldStaking;
+        address redemptionQueue;
     }
 
     function run() external {
@@ -154,10 +156,32 @@ contract DeploySovaBTCYieldSystem is Script {
         );
         ERC1967Proxy stakingProxy = new ERC1967Proxy(address(stakingImpl), stakingInitData);
 
+        console.log("Deploying Redemption Queue...");
+
+        // Deploy Redemption Queue
+        RedemptionQueue queueImpl = new RedemptionQueue();
+        
+        // Configure default queue settings
+        RedemptionQueue.QueueConfig memory queueConfig = RedemptionQueue.QueueConfig({
+            windowDuration: 24 hours,        // 24 hour redemption window
+            expirationDuration: 7 days,      // Requests expire after 7 days
+            maxQueueSize: 1000,              // Max 1000 pending requests
+            maxDailyVolume: 1000 ether,      // Max 1000 BTC equivalent per day
+            processingBatchSize: 50,         // Process 50 requests per batch
+            enabled: true                    // Queue enabled by default
+        });
+        
+        bytes memory queueInitData = abi.encodeCall(
+            RedemptionQueue.initialize,
+            (address(vaultProxy), address(stakingProxy), queueConfig)
+        );
+        ERC1967Proxy queueProxy = new ERC1967Proxy(address(queueImpl), queueInitData);
+
         return DeployedContracts({
             rewardToken: rewardToken,
             yieldVault: address(vaultProxy),
-            yieldStaking: address(stakingProxy)
+            yieldStaking: address(stakingProxy),
+            redemptionQueue: address(queueProxy)
         });
     }
 
@@ -180,6 +204,16 @@ contract DeploySovaBTCYieldSystem is Script {
             console.log("Granted vault role to yield vault");
         }
 
+        // Configure redemption queue in vault and staking contracts
+        vault.setRedemptionQueue(contracts.redemptionQueue);
+        vault.setQueueRedemptionsEnabled(true);
+        console.log("Set redemption queue in vault");
+
+        SovaBTCYieldStaking staking = SovaBTCYieldStaking(contracts.yieldStaking);
+        staking.setRedemptionQueue(contracts.redemptionQueue);
+        staking.setQueueRedemptionsEnabled(true);
+        console.log("Set redemption queue in staking");
+
         console.log("Configuration complete!");
     }
 
@@ -195,6 +229,7 @@ contract DeploySovaBTCYieldSystem is Script {
         }
         console.log("SovaBTC Yield Vault:", contracts.yieldVault);
         console.log("SovaBTC Yield Staking:", contracts.yieldStaking);
+        console.log("Redemption Queue:", contracts.redemptionQueue);
         console.log("===========================\n");
     }
 

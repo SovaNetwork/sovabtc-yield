@@ -8,6 +8,7 @@ import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/Pau
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IRedemptionQueue} from "../redemption/IRedemptionQueue.sol";
 
 /**
  * @title SovaBTCYieldStaking
@@ -78,6 +79,12 @@ contract SovaBTCYieldStaking is
     /// @notice Emergency unstake penalty (basis points)
     uint256 public emergencyUnstakePenalty;
 
+    /// @notice Redemption queue contract
+    IRedemptionQueue public redemptionQueue;
+
+    /// @notice Whether queue redemptions are enabled for rewards
+    bool public queueRedemptionsEnabled;
+
     // Events
     event VaultTokenStaked(address indexed user, uint256 amount, uint256 lockPeriod);
     event SovaStaked(address indexed user, uint256 amount, uint256 lockPeriod);
@@ -86,6 +93,9 @@ contract SovaBTCYieldStaking is
     event RewardsClaimed(address indexed user, uint256 sovaRewards, uint256 sovaBTCRewards);
     event RewardRatesUpdated(uint256 vaultTokenToSovaRate, uint256 sovaToSovaBTCRate, uint256 dualStakeMultiplier);
     event EmergencyWithdraw(address indexed user, uint256 vaultTokenAmount, uint256 sovaAmount);
+    event QueueRedemptionRequested(bytes32 indexed requestId, address indexed user, uint256 amount);
+    event RedemptionQueueUpdated(address indexed newQueue);
+    event QueueRedemptionsToggled(bool enabled);
 
     // Errors
     error ZeroAmount();
@@ -96,6 +106,8 @@ contract SovaBTCYieldStaking is
     error InvalidLockPeriod();
     error InvalidRewardRate();
     error RequireVaultTokenStake();
+    error RedemptionQueueNotSet();
+    error QueueRedemptionsDisabled();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -288,6 +300,89 @@ contract SovaBTCYieldStaking is
     }
 
     /**
+     * @notice Request queued redemption of staking rewards
+     * @param rewardAmount Amount of sovaBTC rewards to redeem
+     * @param receiver Address to receive rewards
+     * @return requestId Unique request identifier
+     */
+    function requestQueuedRewardRedemption(
+        uint256 rewardAmount,
+        address receiver
+    ) external whenNotPaused nonReentrant returns (bytes32 requestId) {
+        if (rewardAmount == 0) revert ZeroAmount();
+        if (receiver == address(0)) revert ZeroAddress();
+        if (address(redemptionQueue) == address(0)) revert RedemptionQueueNotSet();
+        if (!queueRedemptionsEnabled) revert QueueRedemptionsDisabled();
+
+        _updateRewards(msg.sender);
+        UserStake storage stake = userStakes[msg.sender];
+
+        if (stake.sovaBTCRewards < rewardAmount) revert InsufficientBalance();
+
+        // Lock rewards (deduct from user's pending rewards)
+        stake.sovaBTCRewards -= rewardAmount;
+
+        // Request redemption through queue
+        requestId = redemptionQueue.requestRedemption(
+            receiver,
+            IRedemptionQueue.RedemptionType.STAKING_REWARDS,
+            rewardAmount,
+            address(rewardToken),
+            rewardAmount
+        );
+
+        emit QueueRedemptionRequested(requestId, receiver, rewardAmount);
+        return requestId;
+    }
+
+    /**
+     * @notice Fulfill a queued reward redemption (called by redemption queue)
+     * @param requestId Request identifier
+     * @param user User to receive rewards
+     * @param amount Amount of rewards to send
+     * @return actualAmount Actual amount sent
+     */
+    function fulfillQueuedRewardRedemption(
+        bytes32 requestId,
+        address user,
+        uint256 amount
+    ) external nonReentrant returns (uint256 actualAmount) {
+        require(msg.sender == address(redemptionQueue), "Only redemption queue");
+        
+        // Check if we have enough reward tokens
+        uint256 available = rewardToken.balanceOf(address(this));
+        actualAmount = amount > available ? available : amount;
+        
+        // Transfer rewards to user
+        if (actualAmount > 0) {
+            rewardToken.safeTransfer(user, actualAmount);
+        }
+        
+        // Notify queue of fulfillment
+        redemptionQueue.fulfillRedemption(requestId, actualAmount);
+        
+        return actualAmount;
+    }
+
+    /**
+     * @notice Cancel a queued reward redemption and restore rewards to user
+     * @param requestId Request identifier
+     * @param user User to restore rewards to
+     * @param amount Amount of rewards to restore
+     */
+    function cancelQueuedRewardRedemption(
+        bytes32 requestId,
+        address user,
+        uint256 amount
+    ) external {
+        require(msg.sender == address(redemptionQueue), "Only redemption queue");
+        
+        // Restore rewards to user
+        UserStake storage stake = userStakes[user];
+        stake.sovaBTCRewards += amount;
+    }
+
+    /**
      * @notice Emergency unstake with penalty
      */
     function emergencyUnstake() external nonReentrant {
@@ -412,6 +507,36 @@ contract SovaBTCYieldStaking is
         stake.sovaRewards = sovaRewards;
         stake.sovaBTCRewards = sovaBTCRewards;
         stake.lastUpdateTime = block.timestamp;
+    }
+
+    /**
+     * @notice Set redemption queue contract
+     * @param _redemptionQueue Address of redemption queue contract
+     */
+    function setRedemptionQueue(address _redemptionQueue) external onlyOwner {
+        redemptionQueue = IRedemptionQueue(_redemptionQueue);
+        emit RedemptionQueueUpdated(_redemptionQueue);
+    }
+
+    /**
+     * @notice Toggle queue redemptions for rewards
+     * @param enabled Whether to enable queue redemptions
+     */
+    function setQueueRedemptionsEnabled(bool enabled) external onlyOwner {
+        queueRedemptionsEnabled = enabled;
+        emit QueueRedemptionsToggled(enabled);
+    }
+
+    /**
+     * @notice Get user's active reward redemption requests
+     * @param user User address
+     * @return Active request IDs
+     */
+    function getUserActiveRewardRedemptions(address user) external view returns (bytes32[] memory) {
+        if (address(redemptionQueue) == address(0)) {
+            return new bytes32[](0);
+        }
+        return redemptionQueue.getUserActiveRequests(user);
     }
 
     function pause() external onlyOwner {
