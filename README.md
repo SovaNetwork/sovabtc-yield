@@ -12,6 +12,8 @@ A comprehensive Bitcoin yield generation platform built for multi-chain deployme
   - [3. SovaBTCYieldStaking.sol](#3-sovabtcyieldstakingsol)
 - [🔗 Hyperlane Integration](#-hyperlane-integration)
 - [💰 Multi-Asset Collateral Support](#-multi-asset-collateral-support)
+- [🥩 Rewards & Staking System](#-rewards--staking-system)
+- [🔗 sovaBTCYield Token Composability](#-sovabtcyield-token-composability)
 - [🌐 Network Deployment](#-network-deployment)
 - [🛠️ Development Setup](#️-development-setup)
 - [🧪 Testing](#-testing)
@@ -478,6 +480,649 @@ function pauseAsset(address asset) external onlyOwner {
 - **Interoperability**: Integration with other bridge protocols
 
 This multi-asset architecture provides maximum flexibility while maintaining security and unified yield generation across all supported Bitcoin variants.
+
+## 🥩 Rewards & Staking System
+
+### Overview
+
+The SovaBTC Yield System features a sophisticated **dual token staking mechanism** that creates symbiotic relationships between vault participation and governance token staking. This design incentivizes long-term commitment while providing multiple layers of rewards.
+
+### Dual Token Staking Architecture
+
+```mermaid
+graph TD
+    A[User Deposits Bitcoin Variants] --> B[Receives sovaBTCYield Tokens]
+    
+    B --> C{Staking Decision}
+    
+    C -->|Level 1: Base Staking| D[Stake sovaBTCYield]
+    C -->|Level 2: Enhanced Staking| E[Stake sovaBTCYield + SOVA]
+    
+    D --> F[Earn SOVA Tokens]
+    F --> G[Base Reward Rate: 1.0x]
+    
+    E --> H[Earn SOVA + sovaBTC]
+    H --> I[Enhanced Reward Rate: 1.2x]
+    I --> J[Dual Staking Bonus: +20%]
+    
+    subgraph "Lock Period Multipliers"
+        K[No Lock: 1.0x] 
+        L[30 Days: 1.1x]
+        M[90 Days: 1.25x]
+        N[180 Days: 1.5x]
+        O[365 Days: 2.0x]
+    end
+    
+    G --> K
+    I --> K
+    
+    style H fill:#e8f5e8
+    style J fill:#fff3e0
+    style B fill:#e1f5fe
+```
+
+### Staking Mechanics Deep Dive
+
+#### 1. Level 1 Staking: sovaBTCYield → SOVA
+
+**Requirements**: Only sovaBTCYield tokens staked
+
+```solidity
+/**
+ * @notice Stake vault tokens to earn SOVA rewards
+ * @param amount Amount of sovaBTCYield tokens to stake
+ * @param lockPeriod Lock duration (0, 30, 90, 180, or 365 days)
+ */
+function stakeVaultTokens(uint256 amount, uint256 lockPeriod) external {
+    require(amount > 0, "Zero amount");
+    require(isValidLockPeriod(lockPeriod), "Invalid lock period");
+    
+    // Transfer vault tokens to staking contract
+    vaultToken.safeTransferFrom(msg.sender, address(this), amount);
+    
+    // Update user stake
+    UserStake storage userStake = userStakes[msg.sender];
+    userStake.vaultTokenAmount += amount;
+    userStake.lockEndTime = block.timestamp + lockPeriod;
+    userStake.lastRewardUpdate = block.timestamp;
+    
+    emit VaultTokensStaked(msg.sender, amount, lockPeriod);
+}
+```
+
+**Reward Calculation**:
+```solidity
+// SOVA rewards = staked_amount × rate × time × lock_multiplier
+sovaRewards = vaultTokenAmount × vaultToSovaRate × timeStaked × lockMultiplier / 10000;
+```
+
+#### 2. Level 2 Staking: SOVA + sovaBTCYield → Enhanced Rewards
+
+**Requirements**: Must have sovaBTCYield tokens staked + additional SOVA staking
+
+```solidity
+/**
+ * @notice Stake SOVA tokens for enhanced rewards (requires vault tokens staked)
+ * @param amount Amount of SOVA tokens to stake
+ * @param lockPeriod Lock duration (must match or exceed vault token lock)
+ */
+function stakeSova(uint256 amount, uint256 lockPeriod) external {
+    UserStake storage userStake = userStakes[msg.sender];
+    require(userStake.vaultTokenAmount > 0, "Must stake vault tokens first");
+    require(amount > 0, "Zero amount");
+    
+    // Transfer SOVA tokens to staking contract
+    sovaToken.safeTransferFrom(msg.sender, address(this), amount);
+    
+    // Update user stake
+    userStake.sovaAmount += amount;
+    userStake.lockEndTime = block.timestamp + lockPeriod;
+    
+    emit SovaStaked(msg.sender, amount, lockPeriod);
+}
+```
+
+**Enhanced Reward Calculation**:
+```solidity
+// Dual staking provides both SOVA and sovaBTC rewards with bonus
+sovaRewards = vaultTokenAmount × vaultToSovaRate × timeStaked × lockMultiplier × dualBonus / 10000;
+sovaBTCRewards = sovaAmount × sovaToSovaBTCRate × timeStaked × lockMultiplier / 10000;
+```
+
+### Lock Period & Reward Multipliers
+
+#### Lock Period Configuration
+
+| Lock Duration | Multiplier | APY Boost | Use Case |
+|---------------|------------|-----------|----------|
+| **No Lock (0 days)** | 1.0x | Baseline | Flexible liquidity |
+| **30 Days** | 1.1x | +10% | Short-term commitment |
+| **90 Days** | 1.25x | +25% | Medium-term planning |
+| **180 Days** | 1.5x | +50% | Long-term strategy |
+| **365 Days** | 2.0x | +100% | Maximum commitment |
+
+#### Admin Configuration
+
+```solidity
+/**
+ * @notice Configure lock period multipliers
+ * @param lockPeriods Array of lock durations in seconds
+ * @param multipliers Array of corresponding multipliers (basis points)
+ */
+function setLockMultipliers(uint256[] memory lockPeriods, uint256[] memory multipliers) 
+    external onlyOwner 
+{
+    require(lockPeriods.length == multipliers.length, "Array length mismatch");
+    
+    for (uint256 i = 0; i < lockPeriods.length; i++) {
+        require(multipliers[i] >= 1000, "Multiplier too low"); // Minimum 1.0x
+        require(multipliers[i] <= 5000, "Multiplier too high"); // Maximum 5.0x
+        lockMultipliers[lockPeriods[i]] = multipliers[i];
+    }
+}
+```
+
+### Reward Rate Configuration
+
+#### Administrative Controls
+
+```solidity
+/**
+ * @notice Set reward rates for the staking system
+ * @param _vaultToSovaRate SOVA earned per vault token per second (wei)
+ * @param _sovaToSovaBTCRate sovaBTC earned per SOVA per second (wei)  
+ * @param _dualStakeMultiplier Bonus multiplier for dual staking (basis points)
+ */
+function setRewardRates(
+    uint256 _vaultToSovaRate,
+    uint256 _sovaToSovaBTCRate, 
+    uint256 _dualStakeMultiplier
+) external onlyOwner {
+    require(_dualStakeMultiplier >= 10000, "Bonus cannot be negative");
+    require(_dualStakeMultiplier <= 50000, "Bonus too high (max 500%)");
+    
+    vaultToSovaRate = _vaultToSovaRate;
+    sovaToSovaBTCRate = _sovaToSovaBTCRate;
+    dualStakeMultiplier = _dualStakeMultiplier;
+    
+    emit RewardRatesUpdated(_vaultToSovaRate, _sovaToSovaBTCRate, _dualStakeMultiplier);
+}
+```
+
+#### Example Rate Calculations
+
+**Typical Configuration**:
+```solidity
+// Example reward rates (per second, per token)
+vaultToSovaRate = 1e15;        // ~3.15% APY base rate
+sovaToSovaBTCRate = 5e14;      // ~1.58% APY for sovaBTC rewards
+dualStakeMultiplier = 12000;   // 20% bonus for dual staking
+```
+
+**APY Calculation Example**:
+```javascript
+// For 1 sovaBTCYield token staked for 1 year with 365-day lock
+const baseReward = 1 * 1e15 * 31536000; // 1 token × rate × seconds per year
+const lockMultiplier = 2.0; // 365-day lock = 2.0x
+const dualBonus = 1.2; // 20% bonus for dual staking
+const finalAPY = baseReward * lockMultiplier * dualBonus / 1e18 * 100;
+// Result: ~7.56% APY for maximum commitment dual staking
+```
+
+### Reward Pool Management
+
+#### Funding the Reward System
+
+```solidity
+/**
+ * @notice Add reward tokens to the staking contract
+ * @param sovaAmount Amount of SOVA tokens to add for rewards
+ * @param sovaBTCAmount Amount of sovaBTC tokens to add for rewards
+ */
+function addRewards(uint256 sovaAmount, uint256 sovaBTCAmount) external onlyOwner {
+    if (sovaAmount > 0) {
+        sovaToken.safeTransferFrom(msg.sender, address(this), sovaAmount);
+        totalSovaRewards += sovaAmount;
+    }
+    
+    if (sovaBTCAmount > 0) {
+        rewardToken.safeTransferFrom(msg.sender, address(this), sovaBTCAmount);
+        totalSovaBTCRewards += sovaBTCAmount;
+    }
+    
+    emit RewardsAdded(sovaAmount, sovaBTCAmount);
+}
+```
+
+#### Reward Pool Analytics
+
+```solidity
+/**
+ * @notice Get current reward pool status
+ */
+function getRewardPoolStatus() external view returns (
+    uint256 sovaReserves,
+    uint256 sovaBTCReserves,
+    uint256 totalSovaDistributed,
+    uint256 totalSovaBTCDistributed,
+    uint256 estimatedDaysRemaining
+) {
+    sovaReserves = sovaToken.balanceOf(address(this)) - totalSovaStaked;
+    sovaBTCReserves = rewardToken.balanceOf(address(this));
+    totalSovaDistributed = totalSovaRewards - sovaReserves;
+    totalSovaBTCDistributed = totalSovaBTCRewards - sovaBTCReserves;
+    
+    // Estimate days remaining at current reward rate
+    uint256 currentDailyDistribution = getCurrentDailyRewardRate();
+    if (currentDailyDistribution > 0) {
+        estimatedDaysRemaining = sovaReserves / currentDailyDistribution;
+    }
+}
+```
+
+### Advanced Staking Features
+
+#### 1. Compound Staking
+
+```solidity
+/**
+ * @notice Compound SOVA rewards back into SOVA stake
+ */
+function compoundSovaRewards() external {
+    (uint256 sovaRewards,) = getPendingRewards(msg.sender);
+    require(sovaRewards > 0, "No rewards to compound");
+    
+    // Claim SOVA rewards
+    _claimSovaRewards(msg.sender);
+    
+    // Automatically stake claimed SOVA
+    UserStake storage userStake = userStakes[msg.sender];
+    userStake.sovaAmount += sovaRewards;
+    
+    emit RewardsCompounded(msg.sender, sovaRewards);
+}
+```
+
+#### 2. Emergency Unstaking
+
+```solidity
+/**
+ * @notice Emergency unstake with penalties (available even when paused)
+ */
+function emergencyUnstake() external {
+    UserStake storage userStake = userStakes[msg.sender];
+    require(userStake.vaultTokenAmount > 0 || userStake.sovaAmount > 0, "No stake");
+    
+    // Calculate penalties
+    uint256 vaultPenalty = userStake.vaultTokenAmount * VAULT_EMERGENCY_PENALTY / 10000; // 10%
+    uint256 sovaPenalty = userStake.sovaAmount * SOVA_EMERGENCY_PENALTY / 10000; // 20%
+    
+    // Return tokens minus penalties
+    if (userStake.vaultTokenAmount > 0) {
+        uint256 returnAmount = userStake.vaultTokenAmount - vaultPenalty;
+        vaultToken.safeTransfer(msg.sender, returnAmount);
+    }
+    
+    if (userStake.sovaAmount > 0) {
+        uint256 returnAmount = userStake.sovaAmount - sovaPenalty;
+        sovaToken.safeTransfer(msg.sender, returnAmount);
+    }
+    
+    // Forfeit all pending rewards
+    delete userStakes[msg.sender];
+    
+    emit EmergencyUnstake(msg.sender, vaultPenalty, sovaPenalty);
+}
+```
+
+#### 3. Staking Analytics & Insights
+
+```solidity
+/**
+ * @notice Get detailed staking information for a user
+ */
+function getStakingDetails(address user) external view returns (
+    uint256 vaultTokensStaked,
+    uint256 sovaTokensStaked,
+    uint256 lockEndTime,
+    uint256 currentMultiplier,
+    uint256 pendingSovaRewards,
+    uint256 pendingSovaBTCRewards,
+    uint256 estimatedDailyRewards,
+    bool isDualStaking
+) {
+    UserStake memory userStake = userStakes[user];
+    
+    vaultTokensStaked = userStake.vaultTokenAmount;
+    sovaTokensStaked = userStake.sovaAmount;
+    lockEndTime = userStake.lockEndTime;
+    currentMultiplier = _getLockMultiplier(userStake.lockEndTime - block.timestamp);
+    
+    (pendingSovaRewards, pendingSovaBTCRewards) = getPendingRewards(user);
+    
+    isDualStaking = vaultTokensStaked > 0 && sovaTokensStaked > 0;
+    
+    // Calculate estimated daily rewards
+    estimatedDailyRewards = _calculateDailyRewards(user);
+}
+```
+
+### Network-Specific Reward Configurations
+
+#### Ethereum Mainnet
+- **SOVA Rate**: 1e15 per second (~3.15% base APY)
+- **sovaBTC Rate**: 5e14 per second (~1.58% base APY)  
+- **Dual Bonus**: 20% (12000 basis points)
+- **Max Lock Multiplier**: 2.0x (365 days)
+
+#### Base Network
+- **SOVA Rate**: 1.2e15 per second (~3.78% base APY)
+- **sovaBTC Rate**: 6e14 per second (~1.89% base APY)
+- **Dual Bonus**: 25% (12500 basis points)
+- **Max Lock Multiplier**: 2.0x (365 days)
+
+#### Sova Network
+- **SOVA Rate**: 8e14 per second (~2.52% base APY)
+- **sovaBTC Rate**: 1e15 per second (~3.15% base APY)
+- **Dual Bonus**: 30% (13000 basis points)
+- **Max Lock Multiplier**: 2.5x (365 days)
+
+### Performance Optimization Features
+
+#### Gas-Efficient Reward Claims
+
+```solidity
+/**
+ * @notice Batch claim rewards for multiple users (admin function)
+ */
+function batchClaimRewards(address[] calldata users) external onlyOwner {
+    for (uint256 i = 0; i < users.length; i++) {
+        if (userStakes[users[i]].vaultTokenAmount > 0) {
+            _claimRewards(users[i]);
+        }
+    }
+}
+
+/**
+ * @notice Auto-compound rewards during other operations
+ */
+modifier autoCompound() {
+    if (shouldAutoCompound(msg.sender)) {
+        _compoundRewards(msg.sender);
+    }
+    _;
+}
+```
+
+## 🔗 sovaBTCYield Token Composability
+
+### Overview
+
+The **sovaBTCYield token** is designed as a **composable DeFi primitive** that can integrate seamlessly with the broader DeFi ecosystem. As an ERC-20 token representing yield-bearing Bitcoin exposure, it opens up numerous opportunities for additional yield generation and financial products.
+
+### Token Characteristics
+
+#### Technical Specifications
+
+```solidity
+contract SovaBTCYieldToken is ERC20 {
+    string public constant name = "SovaBTC Yield Vault";
+    string public constant symbol = "sovaBTCYield";
+    uint8 public constant decimals = 8; // Bitcoin precision
+    
+    // ERC-4626 compliance for vault share representation
+    function asset() public view returns (address); // Returns the underlying asset
+    function totalAssets() public view returns (uint256); // Total Bitcoin value
+    function convertToAssets(uint256 shares) public view returns (uint256); // Share to asset conversion
+    function convertToShares(uint256 assets) public view returns (uint256); // Asset to share conversion
+}
+```
+
+#### Key Properties
+
+- **🏦 Yield-Bearing**: Represents growing Bitcoin value through professional yield strategies
+- **📈 Appreciating**: Token value increases as yield is added to the vault
+- **🔄 Liquid**: Transferable ERC-20 token (when not staked)
+- **🧩 Composable**: Standard interface for DeFi integration
+- **⚡ Gas Efficient**: 8 decimals reduce gas costs vs 18-decimal tokens
+
+### DeFi Integration Opportunities
+
+#### 1. Automated Market Makers (AMMs)
+
+**Liquidity Pool Creation**:
+```solidity
+// Example: Create sovaBTCYield/WETH pool on Uniswap V3
+IUniswapV3Pool pool = IUniswapV3Factory(factory).createPool(
+    address(sovaBTCYield),
+    address(WETH),
+    3000 // 0.3% fee tier
+);
+```
+
+**Use Cases**:
+- **sovaBTCYield/WETH**: Primary trading pair for immediate liquidity
+- **sovaBTCYield/USDC**: Stable pair for price discovery
+- **sovaBTCYield/WBTC**: Direct Bitcoin variant arbitrage
+- **sovaBTCYield/sovaBTC**: Yield vs non-yield Bitcoin exposure
+
+**Benefits for LPs**:
+- Earn trading fees on appreciating asset
+- Potential for yield compounding through pool rewards
+- Arbitrage opportunities as vault value increases
+
+#### 2. Lending & Borrowing Protocols
+
+**As Collateral** (Compound, Aave, etc.):
+```solidity
+// Example: Supply sovaBTCYield as collateral on Compound
+Comptroller(comptroller).enterMarkets([address(cSovaBTCYield)]);
+CErc20(cSovaBTCYield).mint(sovaBTCYieldAmount);
+
+// Borrow against appreciating collateral
+CErc20(cUSDC).borrow(usdcAmount);
+```
+
+**Advantages**:
+- **Appreciating Collateral**: Collateral value grows over time
+- **Reduced Liquidation Risk**: Growing collateral improves health factor
+- **Capital Efficiency**: Earn yield while using as collateral
+
+**As Lending Asset**:
+```solidity
+// Lend sovaBTCYield tokens to earn additional yield
+IAave(aave).supply(address(sovaBTCYield), amount, msg.sender, 0);
+```
+
+#### 3. Yield Aggregators & Strategies
+
+**Yearn Finance Style Vaults**:
+```solidity
+contract SovaBTCYieldStrategy {
+    function harvest() external {
+        // 1. Claim vault appreciation
+        uint256 newValue = vault.convertToAssets(balanceOf(address(this)));
+        
+        // 2. Compound into additional DeFi positions
+        _depositToCompound(newValue * 50 / 100);
+        _addToUniswapLP(newValue * 30 / 100);
+        _stakeSova(newValue * 20 / 100);
+    }
+}
+```
+
+**Multi-Layer Yield Strategies**:
+- **Base Layer**: sovaBTCYield appreciation from Bitcoin yield strategies
+- **DeFi Layer**: Additional yield from lending protocols
+- **LP Layer**: Trading fees from AMM liquidity provision
+- **Governance Layer**: Rewards from protocol governance participation
+
+#### 4. Derivatives & Structured Products
+
+**Options & Futures**:
+```solidity
+// Call options on sovaBTCYield (bullish on Bitcoin yield)
+IOpyn(opyn).createOption(
+    address(sovaBTCYield), // underlying
+    address(USDC),         // strike asset
+    strikePrice,           // strike price
+    expiry,               // expiration
+    true                  // is call option
+);
+```
+
+**Structured Products**:
+- **Principal Protected Notes**: Guarantee Bitcoin return + upside from yield
+- **Yield Tranches**: Senior/junior structures on yield distribution
+- **Volatility Products**: Trade volatility of yield-bearing Bitcoin
+
+#### 5. Cross-Chain Composability
+
+**Bridge Integration**:
+```solidity
+// Bridge sovaBTCYield to other chains via LayerZero
+ILayerZero(endpoint).send(
+    destinationChainId,
+    abi.encodePacked(address(this)),
+    abi.encode(recipient, amount),
+    payable(msg.sender),
+    address(0),
+    ""
+);
+```
+
+**Multi-Chain Strategies**:
+- **Ethereum**: High-value institutional DeFi
+- **Base**: Low-cost retail strategies  
+- **Arbitrum**: Gaming and social applications
+- **Polygon**: Micro-transaction use cases
+
+### Integration Examples
+
+#### 1. Curve Finance Pool
+
+```solidity
+// Create stable pool with appreciating asset
+ICurveFactory(factory).deploy_metapool(
+    address(sovaBTCYield),      // coin
+    "sovaBTCYield",             // name
+    "sBTCY",                    // symbol
+    18,                         // decimals
+    400,                        // A parameter
+    4000000,                    // fee (0.04%)
+    address(basePool)           // base pool (3CRV)
+);
+```
+
+**Benefits**:
+- Low slippage trading against stable assets
+- Yield from both vault appreciation and Curve rewards
+- Access to Curve governance (veCRV) benefits
+
+#### 2. Convex Finance Boost
+
+```solidity
+// Deposit Curve LP tokens to Convex for boosted rewards
+IConvex(convex).deposit(
+    poolId,              // sovaBTCYield Curve pool ID
+    lpTokenAmount,       // LP token amount
+    true                 // stake for rewards
+);
+```
+
+**Triple Yield Strategy**:
+1. **Base Yield**: sovaBTCYield appreciation from Bitcoin strategies
+2. **Trading Fees**: Curve pool trading fees
+3. **Boosted Rewards**: Convex CRV + CVX rewards
+
+#### 3. Balancer Weighted Pool
+
+```solidity
+// Create weighted pool with multiple yield-bearing assets
+IBalancerVault(vault).joinPool(
+    poolId,
+    msg.sender,
+    recipient,
+    JoinPoolRequest({
+        assets: [sovaBTCYield, stETH, rETH],
+        maxAmountsIn: [maxSovaBTCYield, maxStETH, maxRETH],
+        userData: abi.encode(WeightedPoolJoinKind.INIT, initialAmounts),
+        fromInternalBalance: false
+    })
+);
+```
+
+**Multi-Asset Yield Pool**:
+- **sovaBTCYield**: Bitcoin yield exposure (33%)
+- **stETH**: Ethereum staking yield (33%)  
+- **rETH**: Rocket Pool yield (34%)
+
+#### 4. Ribbon Finance Options Vault
+
+```solidity
+contract SovaBTCYieldCoveredCall {
+    function sellCoveredCalls() external {
+        // Use sovaBTCYield as collateral for covered calls
+        uint256 premium = _sellCallOptions(
+            address(sovaBTCYield),
+            strikePrice,
+            expiry
+        );
+        
+        // Additional yield from option premiums
+        _distributeYield(premium);
+    }
+}
+```
+
+### Composability Benefits
+
+#### For Users
+- **Enhanced Returns**: Stack multiple yield sources
+- **Risk Diversification**: Spread across DeFi protocols
+- **Liquidity Options**: Multiple exit strategies
+- **Gas Efficiency**: Batch operations across protocols
+
+#### for Protocols
+- **TVL Growth**: Attract yield-seeking capital
+- **User Acquisition**: Offer differentiated yield products
+- **Fee Generation**: Trading and management fees
+- **Product Innovation**: Create novel financial instruments
+
+#### for the Ecosystem
+- **Capital Efficiency**: Maximum utilization of Bitcoin capital
+- **Innovation Driver**: New product development catalyst
+- **Network Effects**: Cross-protocol collaboration
+- **Yield Optimization**: Market-driven rate discovery
+
+### Integration Guidelines
+
+#### For DeFi Protocols
+
+**Risk Assessment**:
+- **Smart Contract Risk**: Vault upgrade mechanisms
+- **Yield Dependency**: Underlying Bitcoin strategy performance
+- **Liquidity Risk**: Exit liquidity in extreme scenarios
+- **Concentration Risk**: Bitcoin exposure correlation
+
+**Technical Integration**:
+```solidity
+// Standard ERC-20 integration
+IERC20(sovaBTCYield).approve(protocol, amount);
+IProtocol(protocol).deposit(address(sovaBTCYield), amount);
+
+// ERC-4626 vault-aware integration
+uint256 assets = IERC4626(sovaBTCYield).convertToAssets(shares);
+uint256 shares = IERC4626(sovaBTCYield).convertToShares(assets);
+```
+
+**Monitoring & Analytics**:
+- Track vault performance and yield rates
+- Monitor protocol-specific risks and rewards
+- Implement automated rebalancing strategies
+- Set up alerts for significant changes
+
+This composability framework positions sovaBTCYield as a foundational DeFi primitive that can generate compound yields across the entire ecosystem while maintaining Bitcoin exposure.
 
 ## 🌐 Network Deployment
 
