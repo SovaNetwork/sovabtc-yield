@@ -24,11 +24,7 @@ interface IRedemptionQueue {
 
     function getUserActiveRequests(address user) external view returns (bytes32[] memory);
 
-    function getQueueStatus() external view returns (
-        uint256 queueSize,
-        uint256 dailyVolumeUsed,
-        uint256 dailyVolumeLimit
-    );
+    function getQueueStatus() external view returns (uint256 pendingCount);
 
     function getEstimatedFulfillmentTime() external view returns (uint256);
 }

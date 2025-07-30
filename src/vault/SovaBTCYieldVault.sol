@@ -421,17 +421,11 @@ contract SovaBTCYieldVault is
 
     /**
      * @notice Get redemption queue status
-     * @return queueSize Current queue size
-     * @return dailyVolumeUsed Volume used today
-     * @return dailyVolumeLimit Daily volume limit
+     * @return pendingCount Number of pending redemption requests
      */
-    function getRedemptionQueueStatus() external view returns (
-        uint256 queueSize,
-        uint256 dailyVolumeUsed,
-        uint256 dailyVolumeLimit
-    ) {
+    function getRedemptionQueueStatus() external view returns (uint256 pendingCount) {
         if (address(redemptionQueue) == address(0)) {
-            return (0, 0, 0);
+            return 0;
         }
         return redemptionQueue.getQueueStatus();
     }

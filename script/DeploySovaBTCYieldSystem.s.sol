@@ -164,10 +164,6 @@ contract DeploySovaBTCYieldSystem is Script {
         // Configure default queue settings
         RedemptionQueue.QueueConfig memory queueConfig = RedemptionQueue.QueueConfig({
             windowDuration: 24 hours,        // 24 hour redemption window
-            expirationDuration: 7 days,      // Requests expire after 7 days
-            maxQueueSize: 1000,              // Max 1000 pending requests
-            maxDailyVolume: 1000 ether,      // Max 1000 BTC equivalent per day
-            processingBatchSize: 50,         // Process 50 requests per batch
             enabled: true                    // Queue enabled by default
         });
         

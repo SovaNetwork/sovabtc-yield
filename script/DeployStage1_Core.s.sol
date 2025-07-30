@@ -180,10 +180,6 @@ contract DeployStage1_Core is Script {
         
         RedemptionQueue.QueueConfig memory queueConfig = RedemptionQueue.QueueConfig({
             windowDuration: 24 hours,
-            expirationDuration: 7 days,
-            maxQueueSize: 1000,
-            maxDailyVolume: 1000 ether,
-            processingBatchSize: 50,
             enabled: true
         });
         
